@@ -1,0 +1,18 @@
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - goos:
+      - linux
+    goarch:
+      - amd64
+    main: ./
+    binary: hivemind
+    ldflags: -s -w -X main.version={{ .Version }}
+    flags:
+      - -trimpath
+      - -tags=static
+
+archives:
+    - name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
