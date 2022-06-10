@@ -12,7 +12,7 @@ type procfileEntry struct {
 	Port    int
 }
 
-func parseProcfile(path string, portBase, portStep int) (entries []procfileEntry) {
+func parseProcfile(path string, portBase, portStep int, procNames []string) (entries []procfileEntry) {
 	var f io.Reader
 	switch path {
 	case "-":
@@ -46,9 +46,11 @@ func parseProcfile(path string, portBase, portStep int) (entries []procfileEntry
 		}
 		names[name] = true
 
-		entries = append(entries, procfileEntry{name, cmd, port})
+		if len(procNames) == 0 || stringsContain(procNames, name) {
+			entries = append(entries, procfileEntry{name, cmd, port})
 
-		port += portStep
+			port += portStep
+		}
 
 		return true
 	})

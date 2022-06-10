@@ -26,9 +26,11 @@ type hivemindConfig struct {
 type hivemind struct {
 	title       string
 	output      *multiOutput
+	root        string
+	entries     []procfileEntry
 	procs       []*process
 	procWg      sync.WaitGroup
-	done        chan bool
+	done        chan int
 	interrupted chan os.Signal
 	timeout     time.Duration
 }
@@ -42,36 +44,38 @@ func newHivemind(conf hivemindConfig) (h *hivemind) {
 		h.title = filepath.Base(conf.Root)
 	}
 
+	h.root = conf.Root
 	h.output = &multiOutput{printProcName: !conf.NoPrefix, printTimestamp: conf.PrintTimestamps}
-
-	entries := parseProcfile(conf.Procfile, conf.PortBase, conf.PortStep)
-	h.procs = make([]*process, 0)
-
-	procNames := splitAndTrim(conf.ProcNames)
-
-	for i, entry := range entries {
-		if len(procNames) == 0 || stringsContain(procNames, entry.Name) {
-			h.procs = append(h.procs, newProcess(entry.Name, entry.Command, colors[i%len(colors)], conf.Root, entry.Port, h.output))
-		}
-	}
+	h.entries = parseProcfile(conf.Procfile, conf.PortBase, conf.PortStep, splitAndTrim(conf.ProcNames))
+	h.procs = make([]*process, len(h.entries))
 
 	return
 }
 
-func (h *hivemind) runProcess(proc *process) {
+func (h *hivemind) runProcess(i int) {
 	h.procWg.Add(1)
 
-	go func() {
+	go func(i int) {
 		defer h.procWg.Done()
-		defer func() { h.done <- true }()
+		defer func() { h.done <- i }()
 
-		proc.Run()
-	}()
+		entry := h.entries[i]
+		h.procs[i] = newProcess(entry.Name, entry.Command, colors[i%len(colors)], h.root, entry.Port, h.output)
+		h.procs[i].Run()
+	}(i)
 }
 
 func (h *hivemind) waitForDoneOrInterrupt() {
+forever:
 	select {
-	case <-h.done:
+	case i := <-h.done:
+		// restart only if the process finished with an error
+		if h.procs[i].ProcessState.ExitCode() > 0 {
+			h.output.WriteLine(h.procs[i], []byte("\033[1mRestarting...\033[0m"))
+			time.Sleep(1 * time.Second)
+			h.runProcess(i)
+		}
+		goto forever
 	case <-h.interrupted:
 	}
 }
@@ -100,16 +104,18 @@ func (h *hivemind) waitForExit() {
 func (h *hivemind) Run() {
 	fmt.Printf("\033]0;%s | hivemind\007", h.title)
 
-	h.done = make(chan bool, len(h.procs))
+	h.done = make(chan int, len(h.procs))
 
 	h.interrupted = make(chan os.Signal)
 	signal.Notify(h.interrupted, syscall.SIGINT, syscall.SIGTERM)
 
-	for _, proc := range h.procs {
-		h.runProcess(proc)
+	for i := range h.procs {
+		h.runProcess(i)
 	}
 
 	go h.waitForExit()
 
 	h.procWg.Wait()
 }
+
+// FIXME: Instead of killing everything when one process dies, we should only rerun the died one.
